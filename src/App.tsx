@@ -356,7 +356,6 @@ function DashboardPage() {
             const data = docSnap.data();
             // Always move to correct ID format: groupId_userId
             const newId = `${data.groupId}_${profile.uid}`;
-            console.log(`Syncing member ${docSnap.id} to ${newId} for email ${email}`);
             
             if (docSnap.id !== newId) {
               // We need to delete the old one and create the new one
@@ -534,9 +533,6 @@ function DashboardPage() {
           <Users className="w-16 h-16 text-gray-200 mx-auto mb-4" />
           <h3 className="text-xl font-bold text-gray-400">Nessun gruppo trovato</h3>
           <p className="text-gray-400">Crea il tuo primo gruppo per iniziare!</p>
-          <div className="mt-4 p-2 bg-gray-50 inline-block rounded-lg text-xs text-gray-400">
-            Account: {profile?.email}
-          </div>
         </div>
       ) : (
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
@@ -557,42 +553,6 @@ function DashboardPage() {
           ))}
         </div>
       )}
-
-      {/* Debug Info for User */}
-      <div className="mt-12 pt-8 border-t border-gray-100">
-        <details className="text-[10px] text-gray-300 cursor-pointer">
-          <summary>Debug Info (per assistenza)</summary>
-          <div className="mt-2 p-4 bg-gray-50 rounded-xl font-mono space-y-1 relative">
-            <button 
-              onClick={() => {
-                const info = `UID: ${profile?.uid}\nEmail: ${profile?.email}\nGroups: ${groups.length}\nStatus: ${loading ? 'Loading' : 'Ready'}\nUA: ${navigator.userAgent}`;
-                navigator.clipboard.writeText(info);
-                alert('Info copiate!');
-              }}
-              className="absolute top-2 right-2 p-1 bg-white border border-gray-200 rounded-lg text-[8px] hover:bg-gray-100"
-            >
-              Copia
-            </button>
-            <p>UID: {profile?.uid}</p>
-            <p>Email: {profile?.email}</p>
-            <p>Provider: {auth.currentUser?.providerData[0]?.providerId || 'N/A'}</p>
-            <p>Groups Found: {groups.length}</p>
-            <p>Status: {loading ? 'Loading...' : 'Ready'}</p>
-            <p>Browser: {navigator.userAgent}</p>
-            <button 
-              onClick={async () => {
-                await logout();
-                localStorage.clear();
-                sessionStorage.clear();
-                window.location.reload();
-              }}
-              className="mt-4 w-full py-2 bg-red-600 text-white rounded-lg text-[10px] font-bold uppercase tracking-wider"
-            >
-              Sincronizzazione Forzata (Logout Totale)
-            </button>
-          </div>
-        </details>
-      </div>
     </div>
   );
 }
