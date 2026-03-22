@@ -346,23 +346,30 @@ function DashboardPage() {
     // Sync logic: search for memberships by email that don't have the current UID
     const syncByEmail = async () => {
       try {
-        const q = query(collection(db, 'members'), where('email', '==', profile.email));
+        const email = profile.email.toLowerCase();
+        const q = query(collection(db, 'members'), where('email', '==', email));
         const snapshot = await getDocs(q);
+        
         const updates = snapshot.docs
           .filter(docSnap => docSnap.data().userId !== profile.uid)
           .map(async (docSnap) => {
             const data = docSnap.data();
-            // Delete old doc if ID was based on old UID
-            if (docSnap.id.includes(data.userId)) {
+            // Always move to correct ID format: groupId_userId
+            const newId = `${data.groupId}_${profile.uid}`;
+            console.log(`Syncing member ${docSnap.id} to ${newId} for email ${email}`);
+            
+            if (docSnap.id !== newId) {
+              // We need to delete the old one and create the new one
+              // The rules must allow this!
               await deleteDoc(doc(db, 'members', docSnap.id));
-              const newId = `${data.groupId}_${profile.uid}`;
               await setDoc(doc(db, 'members', newId), {
                 ...data,
                 id: newId,
-                userId: profile.uid
+                userId: profile.uid,
+                email: email // Ensure email is saved
               });
             } else {
-              // Just update UID
+              // Just update UID if ID was already correct but UID was wrong (unlikely)
               await updateDoc(doc(db, 'members', docSnap.id), { userId: profile.uid });
             }
           });

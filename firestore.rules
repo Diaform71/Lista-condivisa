@@ -24,11 +24,12 @@ service cloud.firestore {
     //   - createdAt: timestamp (required, immutable)
     //
     // Collection: /members/{memberId}
-    // Document ID: groupId_userId
+    // Document ID: groupId_userId OR groupId_invite_timestamp
     // Fields:
     //   - id: string (required, immutable)
     //   - groupId: string (required, immutable)
-    //   - userId: string (required, immutable)
+    //   - userId: string (required, 'pending' for invites)
+    //   - email: string (required for invites, recommended for all)
     //   - role: string (required, enum: ['admin', 'member'])
     //   - joinedAt: timestamp (required, immutable)
     //
@@ -115,12 +116,12 @@ service cloud.firestore {
     }
 
     function isValidMember(data) {
-      return hasOnlyAllowedFields(['id', 'groupId', 'userId', 'role', 'joinedAt']) &&
+      return hasOnlyAllowedFields(['id', 'groupId', 'userId', 'role', 'joinedAt', 'email']) &&
              hasRequiredFields(['id', 'groupId', 'userId', 'role', 'joinedAt']) &&
-             data.id == data.groupId + "_" + data.userId &&
              data.userId is string &&
              data.role in ['admin', 'member'] &&
-             data.joinedAt is timestamp;
+             data.joinedAt is timestamp &&
+             (!('email' in data) || isValidEmail(data.email));
     }
 
     function isValidList(data, groupId) {
@@ -159,13 +160,25 @@ service cloud.firestore {
 
     match /members/{memberId} {
       allow get: if isAuthenticated();
-      allow list: if isAuthenticated() && (request.auth.uid == resource.data.userId || isGroupMember(resource.data.groupId));
-      allow create: if isAuthenticated() && isValidMember(request.resource.data) &&
-                    (isGroupAdmin(request.resource.data.groupId) || (request.auth.uid == request.resource.data.userId && request.resource.data.role == 'admin'));
-      allow update: if isGroupAdmin(resource.data.groupId) && isValidMember(request.resource.data) &&
-                    request.resource.data.userId == resource.data.userId &&
-                    request.resource.data.joinedAt == resource.data.joinedAt;
-      allow delete: if isGroupAdmin(resource.data.groupId) || isOwner(resource.data.userId);
+      allow list: if isAuthenticated() && (
+        request.auth.uid == resource.data.userId || 
+        (resource.data.email != null && request.auth.token.email.lower() == resource.data.email.lower()) ||
+        isGroupMember(resource.data.groupId)
+      );
+      allow create: if isAuthenticated() && isValidMember(request.resource.data) && (
+        isGroupAdmin(request.resource.data.groupId) || 
+        (request.auth.uid == request.resource.data.userId && request.resource.data.role == 'admin') ||
+        (request.resource.data.email != null && request.auth.token.email.lower() == request.resource.data.email.lower() && request.resource.data.userId == request.auth.uid)
+      );
+      allow update: if isAuthenticated() && isValidMember(request.resource.data) && (
+        isGroupAdmin(resource.data.groupId) ||
+        (resource.data.email != null && request.auth.token.email.lower() == resource.data.email.lower() && request.resource.data.userId == request.auth.uid)
+      );
+      allow delete: if isAuthenticated() && (
+        isGroupAdmin(resource.data.groupId) || 
+        isOwner(resource.data.userId) ||
+        (resource.data.email != null && request.auth.token.email.lower() == resource.data.email.lower())
+      );
     }
 
     match /groups/{groupId} {
