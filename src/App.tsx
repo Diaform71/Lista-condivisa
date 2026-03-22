@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, Link, useParams, useNavigate } from 'react-router-dom';
-import { onAuthStateChanged, auth, db, doc, getDoc, setDoc, serverTimestamp, FirebaseUser, signInWithPopup, googleProvider, signOut } from './firebase';
+import { onAuthStateChanged, auth, db, doc, getDoc, setDoc, serverTimestamp, FirebaseUser, signInWithPopup, googleProvider, signOut, getDocs, updateDoc, deleteDoc, onSnapshot, collection, query, where, addDoc } from './firebase';
 import { UserProfile } from './types';
 import { LogOut, ShoppingCart, Users, List, Plus, ChevronRight, CheckCircle2, Circle, Trash2, Edit2, ArrowLeft, Home, User as UserIcon, RotateCw } from 'lucide-react';
 import { format } from 'date-fns';
@@ -160,7 +160,6 @@ function LoginPage() {
 }
 
 // --- Dashboard ---
-import { onSnapshot, collection, query, where, addDoc, deleteDoc, updateDoc, getDocs } from './firebase';
 import { Group, GroceryList as GroceryListType, GroceryItem, GroupMember } from './types';
 
 enum OperationType {
@@ -344,6 +343,41 @@ function DashboardPage() {
   useEffect(() => {
     if (!profile) return;
     
+    // Sync logic: search for memberships by email that don't have the current UID
+    const syncByEmail = async () => {
+      try {
+        const q = query(collection(db, 'members'), where('email', '==', profile.email));
+        const snapshot = await getDocs(q);
+        const updates = snapshot.docs
+          .filter(docSnap => docSnap.data().userId !== profile.uid)
+          .map(async (docSnap) => {
+            const data = docSnap.data();
+            // Delete old doc if ID was based on old UID
+            if (docSnap.id.includes(data.userId)) {
+              await deleteDoc(doc(db, 'members', docSnap.id));
+              const newId = `${data.groupId}_${profile.uid}`;
+              await setDoc(doc(db, 'members', newId), {
+                ...data,
+                id: newId,
+                userId: profile.uid
+              });
+            } else {
+              // Just update UID
+              await updateDoc(doc(db, 'members', docSnap.id), { userId: profile.uid });
+            }
+          });
+        await Promise.all(updates);
+      } catch (err) {
+        console.error('Error syncing by email:', err);
+      }
+    };
+    
+    syncByEmail();
+  }, [profile]);
+
+  useEffect(() => {
+    if (!profile) return;
+    
     setError(null);
     // Query members collection to find groups the user belongs to
     const q = query(collection(db, 'members'), where('userId', '==', profile.uid));
@@ -400,6 +434,7 @@ function DashboardPage() {
           id: memberId,
           groupId,
           userId: profile.uid,
+          email: profile.email,
           role: 'admin',
           joinedAt: serverTimestamp(),
         });
@@ -654,55 +689,49 @@ function GroupPage() {
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
     setMemberError(null);
-    if (!newMemberEmail.trim() || !groupId) return;
+    const email = newMemberEmail.trim().toLowerCase();
+    if (!email || !groupId) return;
     
     try {
       // 1. Search for user by email
       const usersRef = collection(db, 'users');
-      const q = query(usersRef, where('email', '==', newMemberEmail.trim().toLowerCase()));
-      let querySnapshot;
-      try {
-        querySnapshot = await getDocs(q);
-      } catch (error) {
-        handleFirestoreError(error, OperationType.LIST, 'users');
+      const q = query(usersRef, where('email', '==', email));
+      const querySnapshot = await getDocs(q);
+      
+      let targetUid = 'pending';
+      if (!querySnapshot.empty) {
+        const targetUser = querySnapshot.docs[0].data() as UserProfile;
+        targetUid = targetUser.uid;
       }
       
-      if (querySnapshot.empty) {
-        setMemberError('Utente non trovato con questa email.');
-        return;
-      }
+      // 2. Check if already a member (by UID or Email)
+      const qExisting = query(collection(db, 'members'), 
+        where('groupId', '==', groupId), 
+        where('email', '==', email)
+      );
+      const existingSnapshot = await getDocs(qExisting);
       
-      const targetUser = querySnapshot.docs[0].data() as UserProfile;
-      const targetUid = targetUser.uid;
-      
-      // 2. Check if already a member
-      const memberId = `${groupId}_${targetUid}`;
-      let memberDoc;
-      try {
-        memberDoc = await getDoc(doc(db, 'members', memberId));
-      } catch (error) {
-        handleFirestoreError(error, OperationType.GET, `members/${memberId}`);
-      }
-      
-      if (memberDoc.exists()) {
-        setMemberError('L\'utente è già un membro di questo gruppo.');
+      if (!existingSnapshot.empty) {
+        setMemberError('L\'utente è già un membro (o invitato) di questo gruppo.');
         return;
       }
 
       // 3. Add member
-      try {
-        await setDoc(doc(db, 'members', memberId), {
-          id: memberId,
-          groupId,
-          userId: targetUid,
-          role: 'member',
-          joinedAt: serverTimestamp(),
-        });
-      } catch (error) {
-        handleFirestoreError(error, OperationType.CREATE, `members/${memberId}`);
-      }
+      const memberId = targetUid === 'pending' ? `${groupId}_invite_${Date.now()}` : `${groupId}_${targetUid}`;
+      
+      await setDoc(doc(db, 'members', memberId), {
+        id: memberId,
+        groupId,
+        userId: targetUid,
+        email: email,
+        role: 'member',
+        joinedAt: serverTimestamp(),
+      });
       
       setNewMemberEmail('');
+      if (targetUid === 'pending') {
+        alert('Utente non ancora registrato. Verrà aggiunto automaticamente al suo primo accesso con questa email.');
+      }
     } catch (error) {
       console.error('Error adding member:', error);
       if (error instanceof Error && error.message.startsWith('{')) {
@@ -760,26 +789,33 @@ function GroupPage() {
           <div className="space-y-4 mb-8">
             {members.map(member => {
               const mProfile = memberProfiles[member.userId];
+              const isPending = member.userId === 'pending';
               return (
-                <div key={member.userId} className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                <div key={member.id || member.userId} className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-gray-100">
                   <div className="flex items-center gap-3">
                     {mProfile?.photoURL ? (
                       <img src={mProfile.photoURL} alt="" className="w-10 h-10 rounded-full border border-gray-200" referrerPolicy="no-referrer" />
                     ) : (
-                      <div className="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-600">
+                      <div className={cn(
+                        "w-10 h-10 rounded-full flex items-center justify-center",
+                        isPending ? "bg-amber-100 text-amber-600" : "bg-emerald-100 text-emerald-600"
+                      )}>
                         <UserIcon className="w-5 h-5" />
                       </div>
                     )}
                     <div>
                       <p className="font-bold text-gray-900">
-                        {mProfile?.displayName || 'Utente...'}
+                        {isPending ? 'Invito in attesa' : (mProfile?.displayName || 'Utente...')}
                         {member.userId === profile?.uid && <span className="ml-2 text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">Tu</span>}
                       </p>
-                      <p className="text-xs text-gray-500">{mProfile?.email || member.userId}</p>
+                      <p className="text-xs text-gray-500">{isPending ? member.email : (mProfile?.email || member.userId)}</p>
                     </div>
                   </div>
-                  <span className="text-xs font-bold uppercase tracking-wider text-gray-400 bg-white px-3 py-1 rounded-lg border border-gray-100">
-                    {member.role === 'admin' ? 'Amministratore' : 'Membro'}
+                  <span className={cn(
+                    "text-xs font-bold uppercase tracking-wider bg-white px-3 py-1 rounded-lg border border-gray-100",
+                    isPending ? "text-amber-500" : "text-gray-400"
+                  )}>
+                    {isPending ? 'Invitato' : (member.role === 'admin' ? 'Amministratore' : 'Membro')}
                   </span>
                 </div>
               );
@@ -814,7 +850,7 @@ function GroupPage() {
                 </button>
               </form>
               <p className="mt-4 text-xs text-gray-400">
-                L'utente deve aver effettuato l'accesso a FamigliaSpesa almeno una volta per essere trovato tramite email.
+                L'invito verrà associato automaticamente all'utente non appena effettuerà l'accesso con questa email.
               </p>
             </div>
           )}

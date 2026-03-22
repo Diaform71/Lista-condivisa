@@ -16,8 +16,10 @@ export interface Group {
 }
 
 export interface GroupMember {
+  id?: string;
   groupId: string;
   userId: string;
+  email?: string;
   role: 'admin' | 'member';
   joinedAt: Timestamp;
 }
