@@ -1,0 +1,5 @@
+{
+  "name": "FamigliaSpesa",
+  "description": "Una web application per la gestione della spesa familiare condivisa, con liste in tempo reale e gruppi familiari.",
+  "requestFramePermissions": []
+}

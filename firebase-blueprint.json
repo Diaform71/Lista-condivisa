@@ -1,0 +1,94 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile information.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "The unique ID of the user." },
+        "displayName": { "type": "string", "description": "The user's display name." },
+        "email": { "type": "string", "format": "email", "description": "The user's email address." },
+        "photoURL": { "type": "string", "format": "uri", "description": "The user's profile photo URL." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the user profile was created." }
+      },
+      "required": ["uid", "displayName", "email", "createdAt"]
+    },
+    "Group": {
+      "title": "Group",
+      "description": "A family or household group.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The unique ID of the group." },
+        "name": { "type": "string", "description": "The name of the group." },
+        "createdBy": { "type": "string", "description": "The UID of the user who created the group." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the group was created." }
+      },
+      "required": ["id", "name", "createdBy", "createdAt"]
+    },
+    "GroupMember": {
+      "title": "GroupMember",
+      "description": "Membership of a user in a group.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique ID (groupId_userId)." },
+        "groupId": { "type": "string", "description": "The ID of the group." },
+        "userId": { "type": "string", "description": "The UID of the user." },
+        "role": { "type": "string", "enum": ["admin", "member"], "description": "The user's role in the group." },
+        "joinedAt": { "type": "string", "format": "date-time", "description": "When the user joined the group." }
+      },
+      "required": ["id", "groupId", "userId", "role", "joinedAt"]
+    },
+    "List": {
+      "title": "List",
+      "description": "A grocery list within a group.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The unique ID of the list." },
+        "groupId": { "type": "string", "description": "The ID of the group this list belongs to." },
+        "name": { "type": "string", "description": "The name of the list." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the list was created." }
+      },
+      "required": ["id", "groupId", "name", "createdAt"]
+    },
+    "Item": {
+      "title": "Item",
+      "description": "An item in a grocery list.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The unique ID of the item." },
+        "listId": { "type": "string", "description": "The ID of the list this item belongs to." },
+        "name": { "type": "string", "description": "The name of the item." },
+        "quantity": { "type": "string", "description": "The quantity of the item (e.g., '2kg', '3 units')." },
+        "notes": { "type": "string", "description": "Optional notes for the item." },
+        "status": { "type": "string", "enum": ["da comprare", "acquistato"], "description": "The status of the item." },
+        "createdBy": { "type": "string", "description": "The UID of the user who added the item." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the item was added." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "When the item was last updated." },
+        "updatedBy": { "type": "string", "description": "The UID of the user who last updated the item." }
+      },
+      "required": ["id", "listId", "name", "status", "createdBy", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles."
+    },
+    "/members/{memberId}": {
+      "schema": "GroupMember",
+      "description": "Members of groups."
+    },
+    "/groups/{groupId}": {
+      "schema": "Group",
+      "description": "Family groups."
+    },
+    "/groups/{groupId}/lists/{listId}": {
+      "schema": "List",
+      "description": "Grocery lists in a group."
+    },
+    "/groups/{groupId}/lists/{listId}/items/{itemId}": {
+      "schema": "Item",
+      "description": "Items in a list."
+    }
+  }
+}

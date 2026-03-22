@@ -1,0 +1,201 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: /users/{userId}
+    // Document ID: userId (UID)
+    // Fields:
+    //   - uid: string (required, immutable)
+    //   - displayName: string (required, max 50)
+    //   - email: string (required, email format)
+    //   - photoURL: string (optional, URL format)
+    //   - createdAt: timestamp (required, immutable)
+    //
+    // Collection: /groups/{groupId}
+    // Document ID: auto-generated
+    // Fields:
+    //   - id: string (required, immutable)
+    //   - name: string (required, max 50)
+    //   - createdBy: string (required, immutable)
+    //   - createdAt: timestamp (required, immutable)
+    //
+    // Collection: /members/{memberId}
+    // Document ID: groupId_userId
+    // Fields:
+    //   - id: string (required, immutable)
+    //   - groupId: string (required, immutable)
+    //   - userId: string (required, immutable)
+    //   - role: string (required, enum: ['admin', 'member'])
+    //   - joinedAt: timestamp (required, immutable)
+    //
+    // Collection: /groups/{groupId}/lists/{listId}
+    // Document ID: auto-generated
+    // Fields:
+    //   - id: string (required, immutable)
+    //   - groupId: string (required, immutable)
+    //   - name: string (required, max 50)
+    //   - createdAt: timestamp (required, immutable)
+    //
+    // Collection: /groups/{groupId}/lists/{listId}/items/{itemId}
+    // Document ID: auto-generated
+    // Fields:
+    //   - id: string (required, immutable)
+    //   - listId: string (required, immutable)
+    //   - name: string (required, max 100)
+    //   - quantity: string (optional, max 50)
+    //   - notes: string (optional, max 200)
+    //   - status: string (required, enum: ['da comprare', 'acquistato'])
+    //   - createdBy: string (required, immutable)
+    //   - createdAt: timestamp (required, immutable)
+    //   - updatedAt: timestamp (required)
+    //   - updatedBy: string (required)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isGroupMember(groupId) {
+      return isAuthenticated() && exists(/databases/$(database)/documents/members/$(groupId + "_" + request.auth.uid));
+    }
+
+    function isGroupAdmin(groupId) {
+      return isAuthenticated() && get(/databases/$(database)/documents/members/$(groupId + "_" + request.auth.uid)).data.role == 'admin';
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUrl(url) {
+      return url is string && (url.matches("^https://.*") || url.matches("^http://.*"));
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['uid', 'displayName', 'email', 'photoURL', 'createdAt']) &&
+             hasRequiredFields(['uid', 'displayName', 'email', 'createdAt']) &&
+             data.uid == request.auth.uid &&
+             data.displayName is string && data.displayName.size() > 0 && data.displayName.size() <= 50 &&
+             isValidEmail(data.email) &&
+             (data.photoURL == null || isValidUrl(data.photoURL)) &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidGroup(data) {
+      return hasOnlyAllowedFields(['id', 'name', 'createdBy', 'createdAt']) &&
+             hasRequiredFields(['id', 'name', 'createdBy', 'createdAt']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 50 &&
+             data.createdBy == request.auth.uid &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidMember(data) {
+      return hasOnlyAllowedFields(['id', 'groupId', 'userId', 'role', 'joinedAt']) &&
+             hasRequiredFields(['id', 'groupId', 'userId', 'role', 'joinedAt']) &&
+             data.id == data.groupId + "_" + data.userId &&
+             data.userId is string &&
+             data.role in ['admin', 'member'] &&
+             data.joinedAt is timestamp;
+    }
+
+    function isValidList(data, groupId) {
+      return hasOnlyAllowedFields(['id', 'groupId', 'name', 'createdAt']) &&
+             hasRequiredFields(['id', 'groupId', 'name', 'createdAt']) &&
+             data.groupId == groupId &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 50 &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidItem(data, listId) {
+      return hasOnlyAllowedFields(['id', 'listId', 'name', 'quantity', 'notes', 'status', 'createdBy', 'createdAt', 'updatedAt', 'updatedBy']) &&
+             hasRequiredFields(['id', 'listId', 'name', 'status', 'createdBy', 'createdAt', 'updatedAt', 'updatedBy']) &&
+             data.listId == listId &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             (!('quantity' in data) || (data.quantity is string && data.quantity.size() <= 50)) &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 200)) &&
+             data.status in ['da comprare', 'acquistato'] &&
+             data.createdBy is string &&
+             data.createdAt is timestamp &&
+             data.updatedAt is timestamp &&
+             data.updatedBy == request.auth.uid;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) &&
+                    request.resource.data.uid == resource.data.uid &&
+                    request.resource.data.createdAt == resource.data.createdAt;
+    }
+
+    match /members/{memberId} {
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.userId || isGroupMember(resource.data.groupId));
+      allow create: if isAuthenticated() && isValidMember(request.resource.data) &&
+                    (isGroupAdmin(request.resource.data.groupId) || (request.auth.uid == request.resource.data.userId && request.resource.data.role == 'admin'));
+      allow update: if isGroupAdmin(resource.data.groupId) && isValidMember(request.resource.data) &&
+                    request.resource.data.userId == resource.data.userId &&
+                    request.resource.data.joinedAt == resource.data.joinedAt;
+      allow delete: if isGroupAdmin(resource.data.groupId) || isOwner(resource.data.userId);
+    }
+
+    match /groups/{groupId} {
+      allow read: if isGroupMember(groupId);
+      allow create: if isAuthenticated() && isValidGroup(request.resource.data);
+      allow update: if isGroupAdmin(groupId) && isValidGroup(request.resource.data) &&
+                    request.resource.data.id == resource.data.id &&
+                    request.resource.data.createdBy == resource.data.createdBy &&
+                    request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isGroupAdmin(groupId);
+
+      match /lists/{listId} {
+        allow read: if isGroupMember(groupId);
+        allow create: if isGroupMember(groupId) && isValidList(request.resource.data, groupId);
+        allow update: if isGroupMember(groupId) && isValidList(request.resource.data, groupId) &&
+                      request.resource.data.id == resource.data.id &&
+                      request.resource.data.groupId == resource.data.groupId &&
+                      request.resource.data.createdAt == resource.data.createdAt;
+        allow delete: if isGroupMember(groupId);
+
+        match /items/{itemId} {
+          allow read: if isGroupMember(groupId);
+          allow create: if isGroupMember(groupId) && isValidItem(request.resource.data, listId);
+          allow update: if isGroupMember(groupId) && isValidItem(request.resource.data, listId) &&
+                        request.resource.data.id == resource.data.id &&
+                        request.resource.data.listId == resource.data.listId &&
+                        request.resource.data.createdBy == resource.data.createdBy &&
+                        request.resource.data.createdAt == resource.data.createdAt;
+          allow delete: if isGroupMember(groupId);
+        }
+      }
+    }
+  }
+}
