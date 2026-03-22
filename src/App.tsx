@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, Link, useParams, useNavigate } from 'react-router-dom';
 import { onAuthStateChanged, auth, db, doc, getDoc, setDoc, serverTimestamp, FirebaseUser, signInWithPopup, googleProvider, signOut } from './firebase';
 import { UserProfile } from './types';
-import { LogOut, ShoppingCart, Users, List, Plus, ChevronRight, CheckCircle2, Circle, Trash2, Edit2, ArrowLeft, Home, User as UserIcon } from 'lucide-react';
+import { LogOut, ShoppingCart, Users, List, Plus, ChevronRight, CheckCircle2, Circle, Trash2, Edit2, ArrowLeft, Home, User as UserIcon, RotateCw } from 'lucide-react';
 import { format } from 'date-fns';
 import { it } from 'date-fns/locale';
 import { clsx, type ClassValue } from 'clsx';
@@ -310,17 +310,51 @@ function DashboardPage() {
   const { profile } = useAuth();
   const [groups, setGroups] = useState<Group[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [newName, setNewName] = useState('');
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const refreshGroups = async () => {
+    if (!profile) return;
+    setIsRefreshing(true);
+    setError(null);
+    try {
+      const q = query(collection(db, 'members'), where('userId', '==', profile.uid));
+      const snapshot = await getDocs(q);
+      const memberDocs = snapshot.docs.map(doc => doc.data() as GroupMember);
+      
+      if (memberDocs.length === 0) {
+        setGroups([]);
+      } else {
+        const groupPromises = memberDocs.map(member => getDoc(doc(db, 'groups', member.groupId)));
+        const groupSnapshots = await Promise.all(groupPromises);
+        const g = groupSnapshots
+          .filter(snap => snap.exists())
+          .map(snap => ({ id: snap.id, ...snap.data() } as Group));
+        setGroups(g);
+      }
+    } catch (err: any) {
+      setError(`Errore ricarica: ${err.message}`);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   useEffect(() => {
     if (!profile) return;
     
+    setError(null);
     // Query members collection to find groups the user belongs to
     const q = query(collection(db, 'members'), where('userId', '==', profile.uid));
     const unsubscribe = onSnapshot(q, async (snapshot) => {
       try {
         const memberDocs = snapshot.docs.map(doc => doc.data() as GroupMember);
+        if (memberDocs.length === 0) {
+          setGroups([]);
+          setLoading(false);
+          return;
+        }
         const groupPromises = memberDocs.map(member => getDoc(doc(db, 'groups', member.groupId)));
         const groupSnapshots = await Promise.all(groupPromises);
         const g = groupSnapshots
@@ -329,11 +363,13 @@ function DashboardPage() {
         
         setGroups(g);
         setLoading(false);
-      } catch (error) {
-        handleFirestoreError(error, OperationType.GET, 'groups');
+      } catch (err: any) {
+        setError(err.message || 'Errore nel caricamento dei gruppi');
+        setLoading(false);
       }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'members');
+    }, (err) => {
+      setError(`Errore Firestore: ${err.message}`);
+      setLoading(false);
     });
     return unsubscribe;
   }, [profile]);
@@ -385,13 +421,26 @@ function DashboardPage() {
           <h1 className="text-3xl font-bold text-gray-900">Bentornato!</h1>
           <p className="text-gray-500">I tuoi gruppi di spesa</p>
         </div>
-        <button
-          onClick={() => setIsAdding(true)}
-          className="flex items-center gap-2 px-6 py-3 bg-emerald-600 text-white rounded-2xl hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 font-semibold"
-        >
-          <Plus className="w-5 h-5" />
-          Nuovo Gruppo
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={refreshGroups}
+            disabled={isRefreshing}
+            className={cn(
+              "p-3 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-2xl transition-all",
+              isRefreshing && "animate-spin text-emerald-600 bg-emerald-50"
+            )}
+            title="Ricarica dati"
+          >
+            <RotateCw className="w-5 h-5" />
+          </button>
+          <button
+            onClick={() => setIsAdding(true)}
+            className="flex items-center gap-2 px-6 py-3 bg-emerald-600 text-white rounded-2xl hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 font-semibold"
+          >
+            <Plus className="w-5 h-5" />
+            Nuovo Gruppo
+          </button>
+        </div>
       </div>
 
       {isAdding && (
@@ -422,6 +471,13 @@ function DashboardPage() {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {error && (
+        <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-2xl text-red-600 text-sm flex items-center gap-3">
+          <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+          <p><strong>Attenzione:</strong> {error}</p>
         </div>
       )}
 
@@ -459,6 +515,30 @@ function DashboardPage() {
           ))}
         </div>
       )}
+
+      {/* Debug Info for User */}
+      <div className="mt-12 pt-8 border-t border-gray-100">
+        <details className="text-[10px] text-gray-300 cursor-pointer">
+          <summary>Debug Info (per assistenza)</summary>
+          <div className="mt-2 p-4 bg-gray-50 rounded-xl font-mono space-y-1 relative">
+            <button 
+              onClick={() => {
+                const info = `UID: ${profile?.uid}\nEmail: ${profile?.email}\nGroups: ${groups.length}\nStatus: ${loading ? 'Loading' : 'Ready'}\nUA: ${navigator.userAgent}`;
+                navigator.clipboard.writeText(info);
+                alert('Info copiate!');
+              }}
+              className="absolute top-2 right-2 p-1 bg-white border border-gray-200 rounded-lg text-[8px] hover:bg-gray-100"
+            >
+              Copia
+            </button>
+            <p>UID: {profile?.uid}</p>
+            <p>Email: {profile?.email}</p>
+            <p>Groups Found: {groups.length}</p>
+            <p>Status: {loading ? 'Loading...' : 'Ready'}</p>
+            <p>Browser: {navigator.userAgent}</p>
+          </div>
+        </details>
+      </div>
     </div>
   );
 }
