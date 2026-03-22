@@ -157,8 +157,59 @@ function LoginPage() {
 }
 
 // --- Dashboard ---
-import { onSnapshot, collection, query, where, addDoc, deleteDoc, updateDoc } from './firebase';
+import { onSnapshot, collection, query, where, addDoc, deleteDoc, updateDoc, getDocs } from './firebase';
 import { Group, GroceryList as GroceryListType, GroceryItem, GroupMember } from './types';
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 function Dashboard() {
   const { profile } = useAuth();
@@ -265,15 +316,21 @@ function DashboardPage() {
     // Query members collection to find groups the user belongs to
     const q = query(collection(db, 'members'), where('userId', '==', profile.uid));
     const unsubscribe = onSnapshot(q, async (snapshot) => {
-      const memberDocs = snapshot.docs.map(doc => doc.data() as GroupMember);
-      const groupPromises = memberDocs.map(member => getDoc(doc(db, 'groups', member.groupId)));
-      const groupSnapshots = await Promise.all(groupPromises);
-      const g = groupSnapshots
-        .filter(snap => snap.exists())
-        .map(snap => ({ id: snap.id, ...snap.data() } as Group));
-      
-      setGroups(g);
-      setLoading(false);
+      try {
+        const memberDocs = snapshot.docs.map(doc => doc.data() as GroupMember);
+        const groupPromises = memberDocs.map(member => getDoc(doc(db, 'groups', member.groupId)));
+        const groupSnapshots = await Promise.all(groupPromises);
+        const g = groupSnapshots
+          .filter(snap => snap.exists())
+          .map(snap => ({ id: snap.id, ...snap.data() } as Group));
+        
+        setGroups(g);
+        setLoading(false);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, 'groups');
+      }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'members');
     });
     return unsubscribe;
   }, [profile]);
@@ -291,17 +348,25 @@ function DashboardPage() {
         createdBy: profile.uid,
         createdAt: serverTimestamp() as any,
       };
-      await setDoc(groupRef, newGroup);
+      try {
+        await setDoc(groupRef, newGroup);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.CREATE, `groups/${groupId}`);
+      }
       
       // Add creator as admin member in the top-level members collection
       const memberId = `${groupId}_${profile.uid}`;
-      await setDoc(doc(db, 'members', memberId), {
-        id: memberId,
-        groupId,
-        userId: profile.uid,
-        role: 'admin',
-        joinedAt: serverTimestamp(),
-      });
+      try {
+        await setDoc(doc(db, 'members', memberId), {
+          id: memberId,
+          groupId,
+          userId: profile.uid,
+          role: 'admin',
+          joinedAt: serverTimestamp(),
+        });
+      } catch (error) {
+        handleFirestoreError(error, OperationType.CREATE, `members/${memberId}`);
+      }
       
       setNewName('');
       setIsAdding(false);
@@ -403,17 +468,24 @@ function GroupPage() {
   const [isAddingList, setIsAddingList] = useState(false);
   const [newListName, setNewListName] = useState('');
   const [showMembers, setShowMembers] = useState(false);
-  const [newMemberUid, setNewMemberUid] = useState('');
+  const [newMemberEmail, setNewMemberEmail] = useState('');
+  const [memberProfiles, setMemberProfiles] = useState<Record<string, UserProfile>>({});
+  const [memberError, setMemberError] = useState<string | null>(null);
+  const memberProfilesRef = React.useRef<Record<string, UserProfile>>({});
 
   useEffect(() => {
     if (!groupId) return;
     
     const fetchGroup = async () => {
-      const gDoc = await getDoc(doc(db, 'groups', groupId));
-      if (gDoc.exists()) {
-        setGroup({ id: gDoc.id, ...gDoc.data() } as Group);
-      } else {
-        navigate('/');
+      try {
+        const gDoc = await getDoc(doc(db, 'groups', groupId));
+        if (gDoc.exists()) {
+          setGroup({ id: gDoc.id, ...gDoc.data() } as Group);
+        } else {
+          navigate('/');
+        }
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, `groups/${groupId}`);
       }
     };
     fetchGroup();
@@ -421,12 +493,39 @@ function GroupPage() {
     const qLists = query(collection(db, `groups/${groupId}/lists`), where('groupId', '==', groupId));
     const unsubLists = onSnapshot(qLists, (snapshot) => {
       setLists(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as GroceryListType)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, `groups/${groupId}/lists`);
     });
 
     const qMembers = query(collection(db, 'members'), where('groupId', '==', groupId));
-    const unsubMembers = onSnapshot(qMembers, (snapshot) => {
-      setMembers(snapshot.docs.map(doc => doc.data() as GroupMember));
+    const unsubMembers = onSnapshot(qMembers, async (snapshot) => {
+      const membersData = snapshot.docs.map(doc => doc.data() as GroupMember);
+      setMembers(membersData);
+      
+      // Fetch profiles for members we don't have yet
+      const currentProfiles = memberProfilesRef.current;
+      const uidsToFetch = membersData
+        .map(m => m.userId)
+        .filter(uid => !currentProfiles[uid]);
+      
+      if (uidsToFetch.length > 0) {
+        const newProfiles: Record<string, UserProfile> = { ...currentProfiles };
+        await Promise.all(uidsToFetch.map(async (uid) => {
+          try {
+            const uDoc = await getDoc(doc(db, 'users', uid));
+            if (uDoc.exists()) {
+              newProfiles[uid] = uDoc.data() as UserProfile;
+            }
+          } catch (error) {
+            handleFirestoreError(error, OperationType.GET, `users/${uid}`);
+          }
+        }));
+        memberProfilesRef.current = newProfiles;
+        setMemberProfiles({ ...newProfiles });
+      }
       setLoading(false);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'members');
     });
 
     return () => {
@@ -456,21 +555,68 @@ function GroupPage() {
 
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMemberUid.trim() || !groupId) return;
+    setMemberError(null);
+    if (!newMemberEmail.trim() || !groupId) return;
+    
     try {
-      const memberId = `${groupId}_${newMemberUid}`;
-      await setDoc(doc(db, 'members', memberId), {
-        id: memberId,
-        groupId,
-        userId: newMemberUid,
-        role: 'member',
-        joinedAt: serverTimestamp(),
-      });
-      setNewMemberUid('');
+      // 1. Search for user by email
+      const usersRef = collection(db, 'users');
+      const q = query(usersRef, where('email', '==', newMemberEmail.trim().toLowerCase()));
+      let querySnapshot;
+      try {
+        querySnapshot = await getDocs(q);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.LIST, 'users');
+      }
+      
+      if (querySnapshot.empty) {
+        setMemberError('Utente non trovato con questa email.');
+        return;
+      }
+      
+      const targetUser = querySnapshot.docs[0].data() as UserProfile;
+      const targetUid = targetUser.uid;
+      
+      // 2. Check if already a member
+      const memberId = `${groupId}_${targetUid}`;
+      let memberDoc;
+      try {
+        memberDoc = await getDoc(doc(db, 'members', memberId));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, `members/${memberId}`);
+      }
+      
+      if (memberDoc.exists()) {
+        setMemberError('L\'utente è già un membro di questo gruppo.');
+        return;
+      }
+
+      // 3. Add member
+      try {
+        await setDoc(doc(db, 'members', memberId), {
+          id: memberId,
+          groupId,
+          userId: targetUid,
+          role: 'member',
+          joinedAt: serverTimestamp(),
+        });
+      } catch (error) {
+        handleFirestoreError(error, OperationType.CREATE, `members/${memberId}`);
+      }
+      
+      setNewMemberEmail('');
     } catch (error) {
       console.error('Error adding member:', error);
+      if (error instanceof Error && error.message.startsWith('{')) {
+        setMemberError('Errore di permessi. Assicurati di essere un amministratore del gruppo.');
+      } else {
+        setMemberError('Errore durante l\'aggiunta del membro.');
+      }
     }
   };
+
+  const currentMember = members.find(m => m.userId === profile?.uid);
+  const isAdmin = currentMember?.role === 'admin';
 
   if (!group) return <LoadingScreen />;
 
@@ -506,35 +652,74 @@ function GroupPage() {
 
       {showMembers && (
         <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm mb-8">
-          <h2 className="text-xl font-bold mb-4">Gestione Membri</h2>
-          <div className="space-y-4 mb-6">
-            {members.map(member => (
-              <div key={member.userId} className="flex items-center justify-between p-3 bg-gray-50 rounded-2xl">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-600">
-                    <UserIcon className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="font-bold text-gray-900">{member.userId === profile?.uid ? 'Tu' : member.userId}</p>
-                    <p className="text-xs text-gray-500 uppercase tracking-wider">{member.role}</p>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-          <form onSubmit={handleAddMember} className="flex gap-2">
-            <input
-              type="text"
-              placeholder="Inserisci UID utente per invitare"
-              className="flex-1 p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
-              value={newMemberUid}
-              onChange={(e) => setNewMemberUid(e.target.value)}
-            />
-            <button type="submit" className="px-4 py-2 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700">
-              Aggiungi
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-bold">Gestione Membri</h2>
+            <button onClick={() => setShowMembers(false)} className="text-gray-400 hover:text-gray-600">
+              Chiudi
             </button>
-          </form>
-          <p className="mt-2 text-xs text-gray-400 italic">Nota: In questa versione demo, usa l'UID dell'utente per invitarlo.</p>
+          </div>
+          
+          <div className="space-y-4 mb-8">
+            {members.map(member => {
+              const mProfile = memberProfiles[member.userId];
+              return (
+                <div key={member.userId} className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                  <div className="flex items-center gap-3">
+                    {mProfile?.photoURL ? (
+                      <img src={mProfile.photoURL} alt="" className="w-10 h-10 rounded-full border border-gray-200" referrerPolicy="no-referrer" />
+                    ) : (
+                      <div className="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-600">
+                        <UserIcon className="w-5 h-5" />
+                      </div>
+                    )}
+                    <div>
+                      <p className="font-bold text-gray-900">
+                        {mProfile?.displayName || 'Utente...'}
+                        {member.userId === profile?.uid && <span className="ml-2 text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">Tu</span>}
+                      </p>
+                      <p className="text-xs text-gray-500">{mProfile?.email || member.userId}</p>
+                    </div>
+                  </div>
+                  <span className="text-xs font-bold uppercase tracking-wider text-gray-400 bg-white px-3 py-1 rounded-lg border border-gray-100">
+                    {member.role === 'admin' ? 'Amministratore' : 'Membro'}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+
+          {isAdmin && (
+            <div className="border-t border-gray-100 pt-6">
+              <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-4">Invita nuovo membro</h3>
+              <form onSubmit={handleAddMember} className="flex flex-col sm:flex-row gap-3">
+                <div className="flex-1">
+                  <input
+                    type="email"
+                    placeholder="Email dell'utente da invitare"
+                    className={cn(
+                      "w-full p-4 bg-gray-50 border rounded-2xl focus:ring-2 focus:ring-emerald-500 outline-none transition-all",
+                      memberError ? "border-red-300" : "border-gray-200"
+                    )}
+                    value={newMemberEmail}
+                    onChange={(e) => {
+                      setNewMemberEmail(e.target.value);
+                      if (memberError) setMemberError(null);
+                    }}
+                  />
+                  {memberError && <p className="mt-2 text-xs text-red-500 font-medium ml-2">{memberError}</p>}
+                </div>
+                <button 
+                  type="submit" 
+                  className="px-8 py-4 bg-emerald-600 text-white font-bold rounded-2xl hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 whitespace-nowrap"
+                >
+                  Invia Invito
+                </button>
+              </form>
+              <p className="mt-4 text-xs text-gray-400">
+                L'utente deve aver effettuato l'accesso a FamigliaSpesa almeno una volta per essere trovato tramite email.
+              </p>
+            </div>
+          )}
         </div>
       )}
 

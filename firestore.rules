@@ -158,7 +158,8 @@ service cloud.firestore {
     }
 
     match /members/{memberId} {
-      allow read: if isAuthenticated() && (request.auth.uid == resource.data.userId || isGroupMember(resource.data.groupId));
+      allow get: if isAuthenticated();
+      allow list: if isAuthenticated() && (request.auth.uid == resource.data.userId || isGroupMember(resource.data.groupId));
       allow create: if isAuthenticated() && isValidMember(request.resource.data) &&
                     (isGroupAdmin(request.resource.data.groupId) || (request.auth.uid == request.resource.data.userId && request.resource.data.role == 'admin'));
       allow update: if isGroupAdmin(resource.data.groupId) && isValidMember(request.resource.data) &&
