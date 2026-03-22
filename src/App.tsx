@@ -952,7 +952,7 @@ function ListPage() {
                     <h4 className="font-bold text-gray-900 truncate">{item.name}</h4>
                     {item.quantity && <span className="text-sm text-emerald-600 font-medium">{item.quantity}</span>}
                   </div>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                  <div className="flex items-center gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-all">
                     <button
                       onClick={() => startEditing(item)}
                       className="p-2 text-gray-300 hover:text-emerald-500 transition-colors"
@@ -990,7 +990,7 @@ function ListPage() {
                     <h4 className="font-medium text-gray-400 line-through truncate">{item.name}</h4>
                     {item.quantity && <span className="text-xs text-gray-300 line-through">{item.quantity}</span>}
                   </div>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                  <div className="flex items-center gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-all">
                     <button
                       onClick={() => startEditing(item)}
                       className="p-2 text-gray-300 hover:text-emerald-500 transition-colors"
