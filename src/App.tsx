@@ -307,7 +307,7 @@ function AppContent() {
 // --- Real Pages Implementation ---
 
 function DashboardPage() {
-  const { profile } = useAuth();
+  const { profile, logout } = useAuth();
   const [groups, setGroups] = useState<Group[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -533,9 +533,21 @@ function DashboardPage() {
             </button>
             <p>UID: {profile?.uid}</p>
             <p>Email: {profile?.email}</p>
+            <p>Provider: {auth.currentUser?.providerData[0]?.providerId || 'N/A'}</p>
             <p>Groups Found: {groups.length}</p>
             <p>Status: {loading ? 'Loading...' : 'Ready'}</p>
             <p>Browser: {navigator.userAgent}</p>
+            <button 
+              onClick={async () => {
+                await logout();
+                localStorage.clear();
+                sessionStorage.clear();
+                window.location.reload();
+              }}
+              className="mt-4 w-full py-2 bg-red-600 text-white rounded-lg text-[10px] font-bold uppercase tracking-wider"
+            >
+              Sincronizzazione Forzata (Logout Totale)
+            </button>
           </div>
         </details>
       </div>
