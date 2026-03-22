@@ -99,7 +99,7 @@ function Navbar() {
         </Link>
         {profile && (
           <div className="flex items-center gap-4">
-            <div className="hidden sm:flex items-center gap-2 text-sm text-gray-600">
+            <div className="flex items-center gap-2 text-sm text-gray-600">
               {profile.photoURL ? (
                 <img src={profile.photoURL} alt="" className="w-8 h-8 rounded-full border border-gray-200" referrerPolicy="no-referrer" />
               ) : (
@@ -107,7 +107,10 @@ function Navbar() {
                   <UserIcon className="w-4 h-4" />
                 </div>
               )}
-              <span className="font-medium">{profile.displayName}</span>
+              <div className="flex flex-col items-start">
+                <span className="font-medium leading-none">{profile.displayName}</span>
+                <span className="text-[10px] text-gray-400 leading-none mt-1">{profile.email}</span>
+              </div>
             </div>
             <button
               onClick={logout}
@@ -433,6 +436,9 @@ function DashboardPage() {
           <Users className="w-16 h-16 text-gray-200 mx-auto mb-4" />
           <h3 className="text-xl font-bold text-gray-400">Nessun gruppo trovato</h3>
           <p className="text-gray-400">Crea il tuo primo gruppo per iniziare!</p>
+          <div className="mt-4 p-2 bg-gray-50 inline-block rounded-lg text-xs text-gray-400">
+            Account: {profile?.email}
+          </div>
         </div>
       ) : (
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
